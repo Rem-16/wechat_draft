@@ -212,6 +212,30 @@ public sealed class WechatAdapter(nint target, bool enableAppend, nint assistant
         { throw new UiAutomationUnavailableException("读取微信控件超过 8 秒，已停止等待。"); }
     }
 
+    internal readonly record struct ChatEditorProbe(string AutomationId, double RelativeLeft, double RelativeTop, double WidthDip);
+
+    // Ranks the visible Edit controls of one WeChat window. The left-edge rule assumes the main window,
+    // where the conversation list occupies the left fifth. A detached single-chat window only has the
+    // icon rail, so its chat input starts at about 12% of the width and the old 20% rule rejected it
+    // outright. WeChat's own identifier now outranks position, and a lone candidate is accepted rather
+    // than discarding the only chat input on screen.
+    internal static IReadOnlyList<int> SelectChatEditors(IReadOnlyList<ChatEditorProbe> probes, out int candidateCount)
+    {
+        var candidates = new List<int>();
+        for (var index = 0; index < probes.Count; index++)
+        {
+            var probe = probes[index];
+            if (probe.WidthDip > 180 && probe.RelativeTop > .48 && probe.RelativeLeft > .06) candidates.Add(index);
+        }
+        candidateCount = candidates.Count;
+        var named = candidates.Where(index => probes[index].AutomationId == "chat_input_field").ToArray();
+        if (named.Length > 0) return named;
+        var positioned = candidates.Where(index => probes[index].RelativeLeft > .20).ToArray();
+        if (positioned.Length > 0) return positioned;
+        if (candidates.Count == 1) return candidates;
+        return Array.Empty<int>();
+    }
+
     private static State Inspect(nint hwnd)
     {
         var root = AutomationElement.FromHandle(hwnd);
@@ -231,17 +255,20 @@ public sealed class WechatAdapter(nint target, bool enableAppend, nint assistant
                 ? "微信当前只提供外层窗口，未提供聊天输入框等可访问控件。已停止，未调用模型；当前环境暂不支持自动预填。"
                 : "未找到微信聊天输入框。请先打开目标单聊，点击输入框后重新检查。");
         }
-        var allEditors = rawEditors.Cast<AutomationElement>().Where(e =>
+        var probes = new List<(AutomationElement Element, ChatEditorProbe Probe)>();
+        foreach (var candidate in rawEditors.Cast<AutomationElement>())
         {
-            if (e.Current.IsOffscreen || !e.Current.IsEnabled) return false;
-            var rect = Logical(e.Current.BoundingRectangle);
-            return rect.Width > 180 && rect.Top > logicalBounds.Top + logicalBounds.Height * .48 &&
-                rect.Left > logicalBounds.Left + logicalBounds.Width * .20 && e.TryGetCurrentPattern(ValuePattern.Pattern, out _);
-        }).ToArray();
-        var namedEditors = allEditors.Where(e => e.Current.AutomationId == "chat_input_field").ToArray();
-        var editors = namedEditors.Length > 0 ? namedEditors : allEditors;
+            if (candidate.Current.IsOffscreen || !candidate.Current.IsEnabled) continue;
+            if (!candidate.TryGetCurrentPattern(ValuePattern.Pattern, out _)) continue;
+            var rect = Logical(candidate.Current.BoundingRectangle);
+            probes.Add((candidate, new(candidate.Current.AutomationId,
+                (rect.Left - logicalBounds.Left) / logicalBounds.Width,
+                (rect.Top - logicalBounds.Top) / logicalBounds.Height, rect.Width)));
+        }
+        var selected = SelectChatEditors(probes.Select(item => item.Probe).ToArray(), out var candidateCount);
+        var editors = selected.Select(index => probes[index].Element).ToArray();
         if (editors.Length == 0)
-            throw new UiAutomationUnavailableException("已读到微信编辑控件，但未找到符合位置与读写条件的聊天输入框。");
+            throw new UiAutomationUnavailableException($"已读到 {rawEditors.Count} 个微信编辑控件，其中 {candidateCount} 个位于消息区下方且可读写，但都无法确认为聊天输入框。");
         if (editors.Length > 1)
             throw new InvalidOperationException($"检测到 {editors.Length} 个可能的聊天输入框，无法唯一确认目标，已停止自动处理。");
         var editor = editors[0]; var inputRect = editor.Current.BoundingRectangle;

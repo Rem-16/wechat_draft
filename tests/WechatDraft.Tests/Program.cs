@@ -146,6 +146,7 @@ foreach (var (name, run) in ChatTypeChecks.Cases())
 foreach (var (name, run) in VisionInteractionChecks.Cases())
     await Test(name, () => { run(); return Task.CompletedTask; });
 foreach (var (name, run) in UiaForegroundChecks.Cases()) await Test(name, run);
+foreach (var (name, run) in UiaEditorChecks.Cases()) await Test(name, run);
 foreach (var (name, run) in DebugSessionChecks.Cases())
     await Test(name, () => { run(); return Task.CompletedTask; });
 await Test("Debug logs retain rejected model output and never the bearer credential", async () =>

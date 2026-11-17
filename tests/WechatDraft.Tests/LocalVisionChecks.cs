@@ -454,6 +454,20 @@ internal static class LocalVisionChecks
                 if (DraftRules.LooksLikeGroupTitle(title)) throw new Exception("Non-count title was changed into a group.");
             return Task.CompletedTask;
         });
+        yield return ("Detached chat window back arrow is not kept as part of the chat title", () =>
+        {
+            // Windows OCR reads the navigation affordance drawn inside the header as a leading angle glyph.
+            foreach (var (raw, expected) in new[]
+            {
+                ("〈 妈", "妈"), ("‹ 妈", "妈"), ("＜ 妈 妈", "妈 妈"), ("« 项目组", "项目组"),
+                ("< 妈", "妈"), ("妈", "妈"), ("<老板>张总", "<老板>张总"), ("阿〈里〉", "阿〈里〉")
+            })
+                if (OcrPrefillGuard.ValidateTitle(raw) != expected)
+                    throw new Exception("Unexpected title normalization for: " + raw);
+            try { OcrPrefillGuard.ValidateTitle("〈 测试群（242）"); }
+            catch (GroupChatDetectedException) { return Task.CompletedTask; }
+            throw new Exception("Group suffix survived title normalization.");
+        });
         yield return ("Independent group titles stop before model calls, contact updates or append intents", async () =>
         {
             foreach (var source in new[] { "ocr", "uia" })
